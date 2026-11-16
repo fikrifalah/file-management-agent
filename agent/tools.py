@@ -1,3 +1,4 @@
+import os
 import shutil
 from pathlib import Path
 from smolagents import tool
@@ -5,15 +6,37 @@ from smolagents import tool
 AGENT_DIR = Path(__file__).resolve().parent
 BASE_DIR = Path(__file__).resolve().parents[1]
 BLOCKED_NAMES = {".env", ".git", ".venv", "venv", "node_modules", "__pycache__"}
+MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety limit for text operations
+
+
+def _is_blocked_part(part: str) -> bool:
+    low = part.lower()
+    return low in BLOCKED_NAMES or low.startswith(".env.")
 
 
 def _safe_path(user_path: str) -> Path:
+    if not user_path or not user_path.strip():
+        raise ValueError("Path cannot be empty.")
+
     target = (BASE_DIR / user_path).resolve()
     if not target.is_relative_to(BASE_DIR):
         raise ValueError(f"Access denied: '{user_path}' is outside the project root.")
-    if target.is_relative_to(AGENT_DIR) or any(part in BLOCKED_NAMES for part in target.parts):
+
+    rel_parts = target.relative_to(BASE_DIR).parts
+    if target.is_relative_to(AGENT_DIR) or any(_is_blocked_part(p) for p in rel_parts):
         raise ValueError(f"Access denied: '{user_path}' is a protected path.")
     return target
+
+
+def _is_binary_Or_too_large(target: Path) -> str | None:
+    size = target.stat().st_size
+    if size > MAX_TEXT_FILE_BYTES:
+        return f"Error: '{target.relative_to(BASE_DIR)}' is too large ({size} bytes; max {MAX_TEXT_FILE_BYTES})."
+    with target.open("rb") as f:
+        chunk = f.read(1024)
+    if b"\x00" in chunk:
+        return f"Error: '{target.relative_to(BASE_DIR)}' appears to be a binary file."
+    return None
 
 
 @tool
@@ -32,7 +55,8 @@ def list_directories(path: str = ".") -> str:
 
         entries = []
         for item in sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
-            if item.resolve() == AGENT_DIR or item.name in BLOCKED_NAMES:
+            resolved = item.resolve()
+            if resolved == AGENT_DIR or _is_blocked_part(item.name):
                 continue
             if item.is_dir():
                 entries.append(f"[DIR]  {item.name}/")
@@ -56,7 +80,7 @@ def create_directory(path: str) -> str:
         if target.exists():
             return f"Directory '{path}' already exists." if target.is_dir() else f"Error: File exists at '{path}'."
         target.mkdir(parents=True, exist_ok=True)
-        return f"Created directory '{path}'."
+        return f"Created directory '{target.relative_to(BASE_DIR)}'."
     except Exception as e:
         return f"Error: {e}"
 
@@ -78,10 +102,10 @@ def create_file(path: str, suffix: str = "", content: str = "", overwrite: bool 
                 path = f"{path}{norm_suffix}"
 
         target = _safe_path(path)
+        if target.exists() and target.is_dir():
+            return f"Error: '{path}' is a directory."
         if target.exists() and not overwrite:
             return f"Error: '{path}' exists. Set overwrite=True to replace."
-        if target.is_dir():
-            return f"Error: '{path}' is a directory."
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
@@ -104,8 +128,8 @@ def move_file(source: str, destination: str) -> str:
 
         if not src.exists():
             return f"Error: Source '{source}' does not exist."
-        if src == BASE_DIR:
-            return "Error: Cannot move project root."
+        if src == BASE_DIR or AGENT_DIR.is_relative_to(src):
+            return "Error: Cannot move project root or a directory containing the agent."
 
         if dst.is_dir():
             dst = _safe_path(str((dst / src.name).relative_to(BASE_DIR)))
@@ -132,8 +156,8 @@ def delete_file(path: str, recursive: bool = False) -> str:
         target = _safe_path(path)
         if not target.exists():
             return f"Error: '{path}' does not exist."
-        if target == BASE_DIR:
-            return "Error: Cannot delete project root."
+        if target == BASE_DIR or AGENT_DIR.is_relative_to(target):
+            return "Error: Cannot delete project root or a directory containing the agent."
 
         if target.is_dir():
             if any(target.iterdir()) and not recursive:
@@ -165,6 +189,10 @@ def read_file(path: str, start_line: int = 1, end_line: int = 100) -> str:
         if start_line < 1 or end_line < start_line:
             return "Error: Invalid line range."
 
+        check_err = _is_binary_Or_too_large(target)
+        if check_err:
+            return check_err
+
         lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
         total = len(lines)
         if total == 0:
@@ -178,6 +206,27 @@ def read_file(path: str, start_line: int = 1, end_line: int = 100) -> str:
         return output
     except Exception as e:
         return f"Error: {e}"
+
+
+def _iter_safe_files(target: Path):
+    if target.is_file():
+        yield target
+        return
+
+    for root, dirs, files in os.walk(target):
+        root_path = Path(root)
+        # Prune blocked directories and AGENT_DIR in-place so os.walk never enters them
+        dirs[:] = sorted(
+            d
+            for d in dirs
+            if not _is_blocked_part(d) and (root_path / d).resolve() != AGENT_DIR
+        )
+        for fname in sorted(files):
+            if _is_blocked_part(fname):
+                continue
+            fpath = (root_path / fname).resolve()
+            if fpath.is_relative_to(BASE_DIR) and not fpath.is_relative_to(AGENT_DIR):
+                yield fpath
 
 
 @tool
@@ -198,23 +247,21 @@ def search_in_files(query: str, path: str = ".", case_sensitive: bool = False, m
         if not target.exists():
             return f"Error: '{path}' does not exist."
 
-        files = [target] if target.is_file() else sorted(target.rglob("*"))
         needle = query if case_sensitive else query.lower()
         matches = []
 
-        for file_path in files:
-            if not file_path.is_file():
-                continue
-            resolved = file_path.resolve()
-            if resolved.is_relative_to(AGENT_DIR) or any(part in BLOCKED_NAMES for part in resolved.parts):
+        for resolved in _iter_safe_files(target):
+            if resolved.stat().st_size > MAX_TEXT_FILE_BYTES:
                 continue
 
-            raw = file_path.read_bytes()
-            if b"\x00" in raw[:1024]:
+            with resolved.open("rb") as f:
+                sample = f.read(1024)
+            if b"\x00" in sample:
                 continue
 
-            rel = file_path.relative_to(BASE_DIR)
-            for line_no, line in enumerate(raw.decode("utf-8", errors="replace").splitlines(), start=1):
+            text = resolved.read_text(encoding="utf-8", errors="replace")
+            rel = resolved.relative_to(BASE_DIR)
+            for line_no, line in enumerate(text.splitlines(), start=1):
                 haystack = line if case_sensitive else line.lower()
                 if needle in haystack:
                     matches.append(f"{rel}:{line_no}: {line.strip()}")
@@ -237,9 +284,16 @@ def replace_in_file(path: str, old_text: str, new_text: str) -> str:
         new_text: Replacement text.
     """
     try:
+        if not old_text:
+            return "Error: 'old_text' cannot be empty."
+
         target = _safe_path(path)
         if not target.is_file():
             return f"Error: '{path}' is not a file."
+
+        check_err = _is_binary_Or_too_large(target)
+        if check_err:
+            return check_err
 
         content = target.read_text(encoding="utf-8")
         count = content.count(old_text)

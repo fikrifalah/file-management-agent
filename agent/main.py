@@ -50,32 +50,35 @@ NON_TOOL_MARKERS = (
 
 def get_available_groq_models(api_key: str) -> list[str]:
     """Fetch models enabled for this GROQ_API_KEY and order them by reliability."""
-    req = urllib.request.Request(
-        f"{GROQ_API_BASE}/models",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "User-Agent": "file-management-agent/1.0",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        req = urllib.request.Request(
+            f"{GROQ_API_BASE}/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "User-Agent": "file-management-agent/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
 
-    available_ids = {
-        item["id"]
-        for item in data.get("data", [])
-        if item.get("id") and not any(m in item["id"].lower() for m in NON_TOOL_MARKERS)
-    }
+        available_ids = {
+            item["id"]
+            for item in data.get("data", [])
+            if item.get("id") and not any(m in item["id"].lower() for m in NON_TOOL_MARKERS)
+        }
 
-    ordered: list[str] = []
-    for pref in PREFERRED_MODELS:
-        if pref in available_ids:
-            ordered.append(pref)
-            available_ids.remove(pref)
+        ordered: list[str] = []
+        for pref in PREFERRED_MODELS:
+            if pref in available_ids:
+                ordered.append(pref)
+                available_ids.remove(pref)
 
-    for rest in sorted(available_ids):
-        ordered.append(rest)
+        for rest in sorted(available_ids):
+            ordered.append(rest)
 
-    return ordered
+        return ordered if ordered else PREFERRED_MODELS.copy()
+    except Exception:
+        return PREFERRED_MODELS.copy()
 
 
 def load_instructions() -> str | None:
@@ -130,6 +133,24 @@ def ensure_api_key() -> str:
     return api_key
 
 
+def run_task_with_fallback(task: str, models: list[str], api_key: str, start_idx: int = 0) -> tuple[object | None, int]:
+    for offset in range(len(models)):
+        idx = (start_idx + offset) % len(models)
+        model_id = models[idx]
+        try:
+            agent = build_agent(model_id, api_key)
+            result = agent.run(task)
+            return result, idx
+        except Exception as e:
+            console.print(f"[yellow]{model_id} error: {e}[/yellow]")
+            if offset + 1 < len(models):
+                next_model = models[(idx + 1) % len(models)]
+                console.print(f"[yellow]Switching to {next_model}...[/yellow]")
+            else:
+                console.print("[bold red]All available Groq models failed for this request.[/bold red]")
+    return None, start_idx
+
+
 def main() -> None:
     api_key = ensure_api_key()
 
@@ -138,10 +159,17 @@ def main() -> None:
         models = [env_model.removeprefix("groq/")]
     else:
         models = get_available_groq_models(api_key)
-        if not models:
-            raise RuntimeError("No chat models are enabled for your GROQ_API_KEY in Groq Console.")
 
     current_idx = 0
+
+    # Support one-shot CLI usage: .\agent\run.bat "list all files"
+    if len(sys.argv) > 1:
+        task = " ".join(sys.argv[1:])
+        result, current_idx = run_task_with_fallback(task, models, api_key, current_idx)
+        if result is not None:
+            console.print(Panel(str(result), title=f"Agent ({models[current_idx]})", border_style="green"))
+        return
+
     console.print(
         Panel(
             f"Active model: [bold green]{models[current_idx]}[/bold green]\n"
@@ -163,22 +191,9 @@ def main() -> None:
         if task.lower() in {"exit", "quit", "q"}:
             break
 
-        for offset in range(len(models)):
-            idx = (current_idx + offset) % len(models)
-            model_id = models[idx]
-            try:
-                agent = build_agent(model_id, api_key)
-                result = agent.run(task)
-                current_idx = idx
-                console.print(Panel(str(result), title=f"Agent ({model_id})", border_style="green"))
-                break
-            except Exception as e:
-                console.print(f"[yellow]{model_id} error: {e}[/yellow]")
-                if offset + 1 < len(models):
-                    next_model = models[(idx + 1) % len(models)]
-                    console.print(f"[yellow]Switching to {next_model}...[/yellow]")
-                else:
-                    console.print("[bold red]All available Groq models failed for this request.[/bold red]")
+        result, current_idx = run_task_with_fallback(task, models, api_key, current_idx)
+        if result is not None:
+            console.print(Panel(str(result), title=f"Agent ({models[current_idx]})", border_style="green"))
 
 
 if __name__ == "__main__":
