@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>File Management Agent</title>
+  <link rel="stylesheet" href="./tailwind.css" />
+  <script src="./marked.js"></script>
+  <script src="./highlight.js"></script>
+</head>
+<body class="flex flex-col h-full w-full">
+
+  <!-- Top Navigation Bar -->
+  <header class="top-bar flex items-center justify-between px-4 shrink-0 select-none">
+    <div class="flex items-center gap-3">
+      <div class="brand-dot"></div>
+      <span class="font-semibold text-sm">File Management Agent</span>
+      <button id="workspaceBadge" type="button" onclick="pickWorkspace()" title="Click to change target workspace folder"
+        class="workspace-pill inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono cursor-pointer truncate">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+        </svg>
+        <span id="workspaceText" class="truncate">Loading workspace...</span>
+      </button>
+    </div>
+
+    <div class="flex items-center gap-2">
+      <span id="activeModelBadge" class="text-xs font-mono px-2.5 py-1 rounded-lg" style="color: var(--text-muted); background: #15151c;">
+        Groq
+      </span>
+      <button id="newChatBtn" type="button" onclick="handleNewChat()" class="btn-ghost inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="12" y1="5" x2="12" y2="19"></line>
+          <line x1="5" y1="12" x2="19" y2="12"></line>
+        </svg>
+        New Chat
+      </button>
+      <button id="settingsBtn" type="button" onclick="openSettings(false)" title="Settings & Groq API Key"
+        class="btn-ghost inline-flex items-center justify-center px-2.5 py-1.5 rounded-lg cursor-pointer">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- Scrollable Chat Feed -->
+  <main id="chatScroll" class="flex-1 overflow-y-auto px-4 py-6">
+    <div class="max-w-3xl mx-auto flex flex-col gap-4" id="messageList">
+
+      <!-- Empty / Welcome State -->
+      <div id="welcomeState" class="flex flex-col items-center justify-center text-center py-6 mt-6 msg-animate">
+        <div class="mb-4 flex items-center justify-center rounded-2xl" style="width:48px;height:48px;background:#1e1e28;border:1px solid var(--border-subtle);">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d97757" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="16" y1="13" x2="8" y2="13"></line>
+            <line x1="16" y1="17" x2="8" y2="17"></line>
+          </svg>
+        </div>
+        <h1 class="text-xl font-semibold mb-1">What would you like to build or organize?</h1>
+        <p class="text-sm mb-4" style="color: var(--text-secondary); max-width: 460px;">
+          Inspect directories, search across code, scaffold new apps, or make surgical edits inside your active workspace folder.
+        </p>
+
+        <div class="flex flex-col gap-2 w-full" style="max-width: 520px; margin-top: 8px;">
+          <button type="button" class="prompt-chip" onclick="useStarterPrompt('List all folders and files in the root workspace directory.')">
+            List all folders and files in the root workspace directory
+          </button>
+          <button type="button" class="prompt-chip" onclick="useStarterPrompt('Search across the project for any TODO or FIXME comments.')">
+            Search across the project for any TODO or FIXME comments
+          </button>
+          <button type="button" class="prompt-chip" onclick="useStarterPrompt('Create a clean notes/todo.md file with a project checklist.')">
+            Create a clean notes/todo.md file with a project checklist
+          </button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Thinking Indicator -->
+    <div id="thinkingIndicator" class="hidden max-w-3xl mx-auto mt-4 msg-animate">
+      <div class="assistant-card flex items-center gap-3" style="padding: 0.8rem 1.1rem;">
+        <div class="flex items-center gap-1.5">
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+          <span class="thinking-dot"></span>
+        </div>
+        <span id="thinkingText" class="text-sm" style="color: var(--text-secondary);">Thinking...</span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Bottom Auto-Expanding Composer -->
+  <footer class="px-4 py-3 shrink-0">
+    <div class="max-w-3xl mx-auto">
+      <div class="composer-box flex items-end gap-2 px-4 py-2.5">
+        <textarea
+          id="promptInput"
+          rows="1"
+          placeholder="Ask the agent to inspect, create, move, or edit files... (Enter to send, Shift+Enter for newline)"
+          class="composer-textarea"
+        ></textarea>
+        <button id="sendBtn" type="button" onclick="handleSend()" class="btn-primary inline-flex items-center justify-center rounded-xl px-3 py-2 shrink-0 cursor-pointer" title="Send message">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+      <div class="text-center mt-1.5 text-xs" style="color: var(--text-muted);">
+        Sandboxed to workspace folder &bull; Protected paths (<code>.env</code>, <code>.git</code>, <code>.venv</code>) are automatically blocked
+      </div>
+    </div>
+  </footer>
+
+  <!-- Settings Modal (Groq API Key + Model + Workspace) -->
+  <div id="settingsModal" class="hidden fixed inset-0 z-50 modal-backdrop flex items-center justify-center p-4">
+    <div class="modal-card p-6 msg-animate">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-lg font-semibold">Settings</h2>
+        <button id="closeModalBtn" type="button" onclick="closeSettings()" class="btn-ghost px-2.5 py-1 rounded-lg text-xs cursor-pointer">Esc</button>
+      </div>
+      <p id="settingsSubtitle" class="text-xs mb-4" style="color: var(--text-secondary);">
+        Configure your Groq API key and target folder. Keys are stored locally in <code>.env</code> next to the application.
+      </p>
+
+      <!-- Groq API Key Input -->
+      <div class="mb-4">
+        <label class="text-xs font-semibold mb-1 flex items-center justify-between">
+          <span>Groq API Key (<code>GROQ_API_KEY</code>)</span>
+          <button type="button" onclick="toggleKeyVisibility()" id="toggleKeyBtn" class="text-xs cursor-pointer" style="background:none;border:none;color:var(--accent);">
+            Show
+          </button>
+        </label>
+        <input id="apiKeyInput" type="password" placeholder="gsk_..." class="field-input font-mono" autocomplete="off" />
+      </div>
+
+      <!-- Optional Model Override -->
+      <div class="mb-4">
+        <label class="text-xs font-semibold mb-1" style="display:block;">
+          Preferred Groq Model <span style="color:var(--text-muted);font-weight:400;">(optional — blank uses auto-fallback)</span>
+        </label>
+        <input id="modelInput" type="text" placeholder="e.g. openai/gpt-oss-120b" class="field-input font-mono" />
+      </div>
+
+      <!-- Workspace Directory -->
+      <div class="mb-4">
+        <label class="text-xs font-semibold mb-1" style="display:block;">Target Workspace Folder</label>
+        <div class="flex items-center gap-2">
+          <input id="workspaceInput" type="text" class="field-input font-mono text-xs" readonly />
+          <button type="button" onclick="browseWorkspaceInModal()" class="btn-ghost px-3 py-2 rounded-lg text-xs font-medium shrink-0 cursor-pointer">
+            Browse...
+          </button>
+        </div>
+      </div>
+
+      <div id="settingsError" class="hidden text-xs mb-4" style="color: var(--danger);"></div>
+
+      <div class="flex items-center justify-end gap-2 mt-6">
+        <button id="cancelSettingsBtn" type="button" onclick="closeSettings()" class="btn-ghost px-4 py-2 rounded-lg text-xs font-medium cursor-pointer">
+          Cancel
+        </button>
+        <button type="button" onclick="saveSettingsForm()" class="btn-primary px-5 py-2 rounded-lg text-xs font-semibold cursor-pointer">
+          Save Settings
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let isBusy = false;
+    let mustProvideKey = false;
+
+    const chatScroll = document.getElementById("chatScroll");
+    const messageList = document.getElementById("messageList");
+    const welcomeState = document.getElementById("welcomeState");
+    const thinkingIndicator = document.getElementById("thinkingIndicator");
+    const thinkingText = document.getElementById("thinkingText");
+    const promptInput = document.getElementById("promptInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const settingsModal = document.getElementById("settingsModal");
+
+    // Auto-expand textarea
+    promptInput.addEventListener("input", () => {
+      promptInput.style.height = "auto";
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 180) + "px";
+    });
+
+    // Enter to send, Shift+Enter for newline
+    promptInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !settingsModal.classList.contains("hidden") && !mustProvideKey) {
+        closeSettings();
+      }
+    });
+
+    // Copy code button handler
+    window.__copyCode = function (btn) {
+      const codeEl = btn.closest(".code-wrapper").querySelector("pre code");
+      if (!codeEl) return;
+      navigator.clipboard.writeText(codeEl.innerText).then(() => {
+        const prev = btn.textContent;
+        btn.textContent = "Copied!";
+        setTimeout(() => { btn.textContent = prev; }, 1800);
+      });
+    };
+
+    function scrollToBottom() {
+      chatScroll.scrollTop = chatScroll.scrollHeight;
+    }
+
+    function setBusy(busy, statusMsg = "Thinking...") {
+      isBusy = busy;
+      sendBtn.disabled = busy;
+      promptInput.disabled = busy;
+      thinkingText.textContent = statusMsg;
+      if (busy) {
+        thinkingIndicator.classList.remove("hidden");
+      } else {
+        thinkingIndicator.classList.add("hidden");
+        promptInput.focus();
+      }
+      scrollToBottom();
+    }
+
+    function appendUserMessage(text) {
+      if (welcomeState) welcomeState.classList.add("hidden");
+      const row = document.createElement("div");
+      row.className = "flex justify-end w-full msg-animate";
+      const bubble = document.createElement("div");
+      bubble.className = "user-bubble text-base";
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      messageList.appendChild(row);
+      scrollToBottom();
+    }
+
+    function appendAssistantMessage(markdownText, modelName = "", isError = false) {
+      if (welcomeState) welcomeState.classList.add("hidden");
+      const row = document.createElement("div");
+      row.className = "flex flex-col items-start w-full msg-animate";
+
+      const card = document.createElement("div");
+      card.className = "assistant-card markdown-body" + (isError ? " assistant-error" : "");
+      card.innerHTML = window.marked.parse(markdownText);
+      window.hljs.highlightAllUnder(card);
+
+      if (modelName) {
+        const meta = document.createElement("div");
+        meta.className = "text-xs font-mono mt-2";
+        meta.style.color = "var(--text-muted)";
+        meta.textContent = modelName;
+        row.appendChild(card);
+        row.appendChild(meta);
+      } else {
+        row.appendChild(card);
+      }
+
+      messageList.appendChild(row);
+      scrollToBottom();
+    }
+
+    function useStarterPrompt(text) {
+      promptInput.value = text;
+      promptInput.dispatchEvent(new Event("input"));
+      handleSend();
+    }
+
+    async function handleSend() {
+      if (isBusy) return;
+      const text = promptInput.value.trim();
+      if (!text) return;
+
+      promptInput.value = "";
+      promptInput.style.height = "auto";
+      appendUserMessage(text);
+      setBusy(true, "Thinking & running tools...");
+
+      try {
+        const res = await window.pywebview.api.send_message(text);
+        if (res && res.missing_key) {
+          setBusy(false);
+          openSettings(true);
+        }
+      } catch (err) {
+        setBusy(false);
+        appendAssistantMessage("**Error:** " + String(err), "", true);
+      }
+    }
+
+    async function handleNewChat() {
+      if (isBusy) return;
+      try {
+        await window.pywebview.api.reset_chat();
+      } catch (_) {}
+      // Remove all message nodes except welcomeState
+      Array.from(messageList.children).forEach((child) => {
+        if (child.id !== "welcomeState") child.remove();
+      });
+      welcomeState.classList.remove("hidden");
+    }
+
+    // Callbacks invoked asynchronously from Python worker thread
+    window.__onAgentStatus = function (statusText) {
+      if (isBusy) {
+        thinkingText.textContent = statusText;
+      }
+    };
+
+    window.__onAgentReply = function (payload) {
+      setBusy(false);
+      if (payload.model) {
+        document.getElementById("activeModelBadge").textContent = payload.model;
+      }
+      appendAssistantMessage(payload.reply || "Done.", payload.model || "");
+    };
+
+    window.__onAgentError = function (payload) {
+      setBusy(false);
+      appendAssistantMessage("**Error:** " + (payload.error || "Request failed."), "", true);
+    };
+
+    // Workspace & Settings Modal logic
+    function applySettingsToHeader(s) {
+      if (!s) return;
+      if (s.workspace) {
+        document.getElementById("workspaceText").textContent = s.workspace;
+        document.getElementById("workspaceInput").value = s.workspace;
+      }
+      if (s.active_model) {
+        document.getElementById("activeModelBadge").textContent = s.active_model;
+      }
+    }
+
+    async function pickWorkspace() {
+      if (isBusy) return;
+      const res = await window.pywebview.api.choose_workspace();
+      if (res && res.ok) {
+        document.getElementById("workspaceText").textContent = res.workspace;
+        document.getElementById("workspaceInput").value = res.workspace;
+      }
+    }
+
+    async function browseWorkspaceInModal() {
+      const res = await window.pywebview.api.choose_workspace();
+      if (res && res.ok) {
+        document.getElementById("workspaceInput").value = res.workspace;
+        document.getElementById("workspaceText").textContent = res.workspace;
+      }
+    }
+
+    function toggleKeyVisibility() {
+      const inp = document.getElementById("apiKeyInput");
+      const btn = document.getElementById("toggleKeyBtn");
+      if (inp.type === "password") {
+        inp.type = "text";
+        btn.textContent = "Hide";
+      } else {
+        inp.type = "password";
+        btn.textContent = "Show";
+      }
+    }
+
+    async function openSettings(firstLaunch = false) {
+      mustProvideKey = firstLaunch;
+      document.getElementById("settingsError").classList.add("hidden");
+      document.getElementById("cancelSettingsBtn").style.display = firstLaunch ? "none" : "inline-flex";
+      document.getElementById("closeModalBtn").style.display = firstLaunch ? "none" : "inline-flex";
+      document.getElementById("settingsSubtitle").innerHTML = firstLaunch
+        ? "Welcome! Enter your <code>GROQ_API_KEY</code> to begin. It will be saved locally to <code>.env</code> next to the app."
+        : "Update your Groq API key, preferred model, or active workspace directory.";
+
+      try {
+        const s = await window.pywebview.api.get_settings();
+        document.getElementById("apiKeyInput").value = s.groq_api_key || "";
+        document.getElementById("modelInput").value = s.groq_model || "";
+        document.getElementById("workspaceInput").value = s.workspace || "";
+      } catch (_) {}
+
+      settingsModal.classList.remove("hidden");
+      setTimeout(() => document.getElementById("apiKeyInput").focus(), 50);
+    }
+
+    function closeSettings() {
+      if (mustProvideKey) return;
+      settingsModal.classList.add("hidden");
+    }
+
+    async function saveSettingsForm() {
+      const key = document.getElementById("apiKeyInput").value.trim();
+      const model = document.getElementById("modelInput").value.trim();
+      const workspace = document.getElementById("workspaceInput").value.trim();
+      const errEl = document.getElementById("settingsError");
+
+      if (!key) {
+        errEl.textContent = "Please enter your GROQ_API_KEY.";
+        errEl.classList.remove("hidden");
+        return;
+      }
+
+      try {
+        const res = await window.pywebview.api.save_settings({
+          groq_api_key: key,
+          groq_model: model,
+          workspace: workspace,
+        });
+        if (!res.ok) {
+          errEl.textContent = res.error || "Failed to save settings.";
+          errEl.classList.remove("hidden");
+          return;
+        }
+        mustProvideKey = false;
+        applySettingsToHeader(res.settings);
+        settingsModal.classList.add("hidden");
+        promptInput.focus();
+      } catch (e) {
+        errEl.textContent = String(e);
+        errEl.classList.remove("hidden");
+      }
+    }
+
+    // Initialize once pywebview bridge is ready
+    window.addEventListener("pywebviewready", async () => {
+      try {
+        const s = await window.pywebview.api.get_settings();
+        applySettingsToHeader(s);
+        if (!s.has_api_key) {
+          openSettings(true);
+        } else {
+          promptInput.focus();
+        }
+      } catch (e) {
+        console.error("Init failed:", e);
+      }
+    });
+  </script>
+</body>
+</html>

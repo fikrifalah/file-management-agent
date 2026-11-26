@@ -1,12 +1,53 @@
 import os
 import shutil
+import sys
 from pathlib import Path
 from smolagents import tool
 
-AGENT_DIR = Path(__file__).resolve().parent
-BASE_DIR = Path(__file__).resolve().parents[1]
-BLOCKED_NAMES = {".env", ".git", ".venv", "venv", "node_modules", "__pycache__"}
+
+def get_app_dir() -> Path:
+    """Return directory containing the executable (when frozen) or this script (in dev)."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_resource_dir() -> Path:
+    """Return directory containing bundled read-only resources (sys._MEIPASS when frozen)."""
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(getattr(sys, "_MEIPASS")).resolve()
+    return Path(__file__).resolve().parent
+
+
+AGENT_DIR = get_app_dir()
+
+
+def _default_base_dir() -> Path:
+    env_root = os.getenv("TARGET_ROOT", "").strip()
+    if env_root:
+        return Path(env_root).resolve()
+    if AGENT_DIR.parent.name.lower() == "dist" and AGENT_DIR.parent.parent.exists():
+        return AGENT_DIR.parent.parent.resolve()
+    return AGENT_DIR.parent.resolve()
+
+
+BASE_DIR = _default_base_dir()
+BLOCKED_NAMES = {".env", ".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", "config.json"}
 MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety limit for text operations
+
+
+def get_base_dir() -> Path:
+    return BASE_DIR
+
+
+def set_base_dir(new_base: str | Path) -> Path:
+    """Allow the desktop UI to switch the active target workspace directory."""
+    global BASE_DIR
+    resolved = Path(new_base).resolve()
+    if not resolved.exists() or not resolved.is_dir():
+        raise ValueError(f"Invalid target directory: '{new_base}'")
+    BASE_DIR = resolved
+    return BASE_DIR
 
 
 def _is_blocked_part(part: str) -> bool:

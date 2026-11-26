@@ -10,9 +10,11 @@ from rich.panel import Panel
 from smolagents import CodeAgent, OpenAIServerModel
 
 from tools import (
+    AGENT_DIR,
     create_directory,
     create_file,
     delete_file,
+    get_resource_dir,
     list_directories,
     move_file,
     read_file,
@@ -20,7 +22,7 @@ from tools import (
     search_in_files,
 )
 
-AGENT_DIR = Path(__file__).resolve().parent
+RESOURCE_DIR = get_resource_dir()
 load_dotenv(AGENT_DIR / ".env")
 
 console = Console()
@@ -82,12 +84,39 @@ def get_available_groq_models(api_key: str) -> list[str]:
 
 
 def load_instructions() -> str | None:
-    prompt_file = AGENT_DIR / "system prompt.yaml"
-    if prompt_file.exists():
-        text = prompt_file.read_text(encoding="utf-8").strip()
-        if text:
-            return text
+    """Load system prompt from user-writable AGENT_DIR first, falling back to bundled RESOURCE_DIR."""
+    for base in (AGENT_DIR, RESOURCE_DIR):
+        prompt_file = base / "system prompt.yaml"
+        if prompt_file.exists():
+            text = prompt_file.read_text(encoding="utf-8").strip()
+            if text:
+                return text
     return None
+
+
+def save_api_key(api_key: str, model_id: str | None = None) -> Path:
+    """Save GROQ_API_KEY (and optional GROQ_MODEL) to AGENT_DIR / '.env' next to the executable."""
+    api_key = api_key.strip()
+    env_path = AGENT_DIR / ".env"
+    lines: list[str] = []
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip().startswith(("GROQ_API_KEY=", "GROQ_MODEL=")):
+                lines.append(line)
+
+    lines.append(f"GROQ_API_KEY={api_key}")
+    os.environ["GROQ_API_KEY"] = api_key
+
+    if model_id is not None:
+        model_id = model_id.strip()
+        if model_id:
+            lines.append(f"GROQ_MODEL={model_id}")
+            os.environ["GROQ_MODEL"] = model_id
+        else:
+            os.environ.pop("GROQ_MODEL", None)
+
+    env_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    return env_path
 
 
 def build_agent(model_id: str, api_key: str) -> CodeAgent:

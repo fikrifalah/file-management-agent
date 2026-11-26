@@ -52,7 +52,18 @@ All 8 tools in [tools.py](file:///c:/Users/fikrifalah/Documents/GitHub/file-mana
 
 ## How to Run It
 
-### Option 1: One-Command Launcher (Recommended)
+### Option 1: Sleek Desktop App (`pywebview` + HTML/Tailwind UI)
+Build and launch the standalone native desktop application ([desktop_app.py](file:///c:/Users/fikrifalah/Documents/GitHub/file-management-agent/agent/desktop_app.py) + [ui/index.html](file:///c:/Users/fikrifalah/Documents/GitHub/file-management-agent/agent/ui/index.html)):
+
+```powershell
+.\agent\.venv\Scripts\python.exe agent\build.py
+```
+
+This creates **`dist/FileManagementAgent/FileManagementAgent.exe`**.
+* **To share with users:** Zip the entire **`dist/FileManagementAgent/`** folder. Users unzip it anywhere and double-click **`FileManagementAgent.exe`** (no Python or terminal required).
+* **Groq API Key Settings:** On first launch, a **Settings** modal opens automatically where users input their `GROQ_API_KEY` (saved locally to `.env` next to the executable) and can choose their target workspace folder.
+
+### Option 2: One-Command Terminal Launcher
 Drop the `agent/` folder into any project and run:
 
 **Windows (PowerShell / CMD):**
