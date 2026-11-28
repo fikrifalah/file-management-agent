@@ -25,6 +25,9 @@
     </div>
 
     <div class="flex items-center gap-2">
+      <span id="ragStatusBadge" class="text-xs font-mono px-2.5 py-1 rounded-lg" style="color: var(--success); background: #132219; border: 1px solid rgba(34,197,94,0.25);" title="Local SQLite + sqlite-vec RAG index status">
+        RAG: Indexing...
+      </span>
       <span id="activeModelBadge" class="text-xs font-mono px-2.5 py-1 rounded-lg" style="color: var(--text-muted); background: #15151c;">
         Groq
       </span>
@@ -328,6 +331,22 @@
       appendAssistantMessage("**Error:** " + (payload.error || "Request failed."), "", true);
     };
 
+    window.__onRagStatus = function (payload) {
+      const badge = document.getElementById("ragStatusBadge");
+      if (!badge || !payload) return;
+      if (payload.state === "indexing") {
+        badge.textContent = "RAG: Indexing...";
+        badge.style.color = "#f59e0b";
+      } else if (payload.state === "ready") {
+        const total = (payload.indexed_files || 0) + (payload.unchanged_files || 0);
+        badge.textContent = `RAG: ${total} file${total === 1 ? "" : "s"}`;
+        badge.style.color = "var(--success)";
+      } else if (payload.state === "error") {
+        badge.textContent = "RAG: Error";
+        badge.style.color = "var(--danger)";
+      }
+    };
+
     // Workspace & Settings Modal logic
     function applySettingsToHeader(s) {
       if (!s) return;
@@ -337,6 +356,9 @@
       }
       if (s.active_model) {
         document.getElementById("activeModelBadge").textContent = s.active_model;
+      }
+      if (s.rag_status) {
+        window.__onRagStatus(s.rag_status);
       }
     }
 

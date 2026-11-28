@@ -11,10 +11,11 @@ A lightweight, self-contained AI file management and coding agent powered by **`
    * Because it uses `CodeAgent`, it can batch directory creation, multiple `create_file` calls, and `final_answer` into one Python action step.
 2. **File & Folder Organization**
    * Listing directories, renaming files, moving files into structured subfolders, and cleaning up unused files/directories.
-3. **Codebase Search & Targeted Refactoring**
-   * Searching across all project text files with `search_in_files` (grep-style `file:line: match`).
-   * Reading specific line ranges with `read_file` without blowing up the LLM context window.
-   * Making surgical edits to existing code using `replace_in_file` without rewriting entire files.
+3. **Codebase Search, Document RAG & Targeted Refactoring**
+   * **Local Semantic RAG (`rag_search(query)`)**: Parses **PDF (`.pdf`)**, **Word (`.docx`)**, **Excel (`.xlsx`)**, and text/code files, embeds chunks locally on CPU using `fastembed` (`BAAI/bge-small-en-v1.5` ONNX, ~67 MB, 384-dim), and stores them in **SQLite + `sqlite-vec`** (`rag_index.db`) with each chunk tagged by its source `file_name`.
+   * Automatically indexes the workspace directory at runtime startup, and automatically embeds/updates any files created, edited, moved, or deleted by the agent.
+   * Exact substring search via `search_in_files` and line-numbered reads via `read_file`.
+   * Surgical edits to existing code using `replace_in_file` without rewriting entire files.
 4. **Zero-Config Drop-In Usage**
    * Uses `Path(__file__).resolve().parents[1]` to automatically target the parent folder (`BASE_DIR`) while isolating its own virtual environment (`agent/.venv`) and secrets (`agent/.env`).
 

@@ -1,6 +1,7 @@
 import os
 import shutil
 import sys
+import threading
 from pathlib import Path
 from smolagents import tool
 
@@ -32,8 +33,71 @@ def _default_base_dir() -> Path:
 
 
 BASE_DIR = _default_base_dir()
-BLOCKED_NAMES = {".env", ".git", ".venv", "venv", "node_modules", "__pycache__", "build", "dist", "config.json"}
+BLOCKED_NAMES = {
+    ".env",
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "build",
+    "dist",
+    "config.json",
+    "rag_index.db",
+    "rag_index.db-wal",
+    "rag_index.db-shm",
+    "models_cache",
+}
 MAX_TEXT_FILE_BYTES = 5 * 1024 * 1024  # 5 MB safety limit for text operations
+
+_rag_engine = None
+_rag_init_lock = threading.RLock()
+_indexed_workspace: Path | None = None
+
+
+def get_rag_engine():
+    global _rag_engine
+    if _rag_engine is None:
+        with _rag_init_lock:
+            if _rag_engine is None:
+                from rag_engine import LocalRagEngine
+
+                _rag_engine = LocalRagEngine(
+                    db_path=AGENT_DIR / "rag_index.db",
+                    cache_dir=AGENT_DIR / "models_cache",
+                )
+    return _rag_engine
+
+
+def initialize_rag_index() -> dict[str, int]:
+    """Embed the entire active BASE_DIR into SQLite + sqlite-vec so it is ready for RAG search."""
+    global _indexed_workspace
+    with _rag_init_lock:
+        stats = get_rag_engine().index_directory(BASE_DIR, AGENT_DIR, _is_blocked_part)
+        _indexed_workspace = BASE_DIR
+        return stats
+
+
+def _ensure_rag_ready() -> None:
+    if _indexed_workspace != BASE_DIR:
+        initialize_rag_index()
+
+
+def _sync_file_to_rag(target: Path) -> None:
+    """Embed a newly created or modified file into the RAG database if RAG is active."""
+    try:
+        if _rag_engine is not None or _indexed_workspace is not None:
+            get_rag_engine().index_file(target, BASE_DIR)
+    except Exception:
+        pass
+
+
+def _remove_path_from_rag(target: Path, is_dir: bool = False) -> None:
+    try:
+        if _rag_engine is not None or _indexed_workspace is not None:
+            get_rag_engine().remove_path(target, BASE_DIR, is_dir=is_dir)
+    except Exception:
+        pass
 
 
 def get_base_dir() -> Path:
@@ -42,17 +106,19 @@ def get_base_dir() -> Path:
 
 def set_base_dir(new_base: str | Path) -> Path:
     """Allow the desktop UI to switch the active target workspace directory."""
-    global BASE_DIR
+    global BASE_DIR, _indexed_workspace
     resolved = Path(new_base).resolve()
     if not resolved.exists() or not resolved.is_dir():
         raise ValueError(f"Invalid target directory: '{new_base}'")
-    BASE_DIR = resolved
+    if resolved != BASE_DIR:
+        BASE_DIR = resolved
+        _indexed_workspace = None
     return BASE_DIR
 
 
 def _is_blocked_part(part: str) -> bool:
     low = part.lower()
-    return low in BLOCKED_NAMES or low.startswith(".env.")
+    return low in BLOCKED_NAMES or low.startswith(".env.") or low.startswith("rag_index.db")
 
 
 def _safe_path(user_path: str) -> Path:
@@ -78,6 +144,20 @@ def _is_binary_Or_too_large(target: Path) -> str | None:
     if b"\x00" in chunk:
         return f"Error: '{target.relative_to(BASE_DIR)}' appears to be a binary file."
     return None
+
+
+@tool
+def rag_search(query: str) -> str:
+    """Semantic RAG search across workspace files (PDF, DOCX, XLSX, text, and code).
+
+    Args:
+        query: Natural language search query to find relevant content across the directory.
+    """
+    try:
+        _ensure_rag_ready()
+        return get_rag_engine().search(query)
+    except Exception as e:
+        return f"Error: {e}"
 
 
 @tool
@@ -128,7 +208,7 @@ def create_directory(path: str) -> str:
 
 @tool
 def create_file(path: str, suffix: str = "", content: str = "", overwrite: bool = False) -> str:
-    """Create a file (and parent folders automatically) with optional suffix and content.
+    """Create a file (and parent folders automatically), write content, and embed it into the RAG database.
 
     Args:
         path: Relative file path.
@@ -150,7 +230,8 @@ def create_file(path: str, suffix: str = "", content: str = "", overwrite: bool 
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return f"Created file '{target.relative_to(BASE_DIR)}'."
+        _sync_file_to_rag(target)
+        return f"Created file '{target.relative_to(BASE_DIR)}' and indexed into RAG."
     except Exception as e:
         return f"Error: {e}"
 
@@ -172,6 +253,7 @@ def move_file(source: str, destination: str) -> str:
         if src == BASE_DIR or AGENT_DIR.is_relative_to(src):
             return "Error: Cannot move project root or a directory containing the agent."
 
+        was_dir = src.is_dir()
         if dst.is_dir():
             dst = _safe_path(str((dst / src.name).relative_to(BASE_DIR)))
 
@@ -180,6 +262,14 @@ def move_file(source: str, destination: str) -> str:
 
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dst))
+
+        _remove_path_from_rag(src, is_dir=was_dir)
+        if dst.is_file():
+            _sync_file_to_rag(dst)
+        elif dst.is_dir():
+            for f in _iter_safe_files(dst):
+                _sync_file_to_rag(f)
+
         return f"Moved '{src.relative_to(BASE_DIR)}' to '{dst.relative_to(BASE_DIR)}'."
     except Exception as e:
         return f"Error: {e}"
@@ -204,9 +294,11 @@ def delete_file(path: str, recursive: bool = False) -> str:
             if any(target.iterdir()) and not recursive:
                 return f"Error: '{path}' is not empty. Set recursive=True."
             shutil.rmtree(target) if recursive else target.rmdir()
+            _remove_path_from_rag(target, is_dir=True)
             return f"Deleted directory '{path}'."
 
         target.unlink()
+        _remove_path_from_rag(target, is_dir=False)
         return f"Deleted file '{path}'."
     except Exception as e:
         return f"Error: {e}"
@@ -256,7 +348,6 @@ def _iter_safe_files(target: Path):
 
     for root, dirs, files in os.walk(target):
         root_path = Path(root)
-        # Prune blocked directories and AGENT_DIR in-place so os.walk never enters them
         dirs[:] = sorted(
             d
             for d in dirs
@@ -272,7 +363,7 @@ def _iter_safe_files(target: Path):
 
 @tool
 def search_in_files(query: str, path: str = ".", case_sensitive: bool = False, max_results: int = 20) -> str:
-    """Search for a text substring across files.
+    """Search for an exact text substring across plain text files.
 
     Args:
         query: Substring to find.
@@ -317,7 +408,7 @@ def search_in_files(query: str, path: str = ".", case_sensitive: bool = False, m
 
 @tool
 def replace_in_file(path: str, old_text: str, new_text: str) -> str:
-    """Replace an exact unique text block in a file.
+    """Replace an exact unique text block in a file and update its RAG embedding.
 
     Args:
         path: Relative file path.
@@ -344,6 +435,7 @@ def replace_in_file(path: str, old_text: str, new_text: str) -> str:
             return f"Error: 'old_text' matched {count} times. Add surrounding context."
 
         target.write_text(content.replace(old_text, new_text, 1), encoding="utf-8")
-        return f"Updated '{target.relative_to(BASE_DIR)}'."
+        _sync_file_to_rag(target)
+        return f"Updated '{target.relative_to(BASE_DIR)}' and re-indexed into RAG."
     except Exception as e:
         return f"Error: {e}"

@@ -24,7 +24,7 @@ from main import (
     load_instructions,
     save_api_key,
 )
-from tools import get_base_dir, set_base_dir
+from tools import get_base_dir, initialize_rag_index, set_base_dir
 
 load_dotenv(AGENT_DIR / ".env")
 CONFIG_PATH = AGENT_DIR / "config.json"
@@ -69,6 +69,24 @@ class BridgeApi:
         if api_key:
             threading.Thread(target=self._refresh_models, args=(api_key,), daemon=True).start()
 
+        self.last_rag_stats: dict | None = None
+        self.last_rag_error: str | None = None
+
+        # Automatically index the workspace directory into SQLite + sqlite-vec at runtime startup
+        self._index_thread = threading.Thread(target=self._index_workspace_bg, daemon=True)
+        self._index_thread.start()
+
+    def _index_workspace_bg(self) -> None:
+        self._emit_js("__onRagStatus", {"state": "indexing"})
+        try:
+            self.last_rag_error = None
+            stats = initialize_rag_index()
+            self.last_rag_stats = stats
+            self._emit_js("__onRagStatus", {"state": "ready", **stats})
+        except Exception as e:
+            self.last_rag_error = f"{type(e).__name__}: {e}"
+            self._emit_js("__onRagStatus", {"state": "error", "error": self.last_rag_error})
+
     def attach_window(self, window: webview.Window) -> None:
         self._window = window
 
@@ -87,6 +105,13 @@ class BridgeApi:
         groq_model = os.getenv("GROQ_MODEL", "").strip()
         masked = f"{api_key[:6]}...{api_key[-4:]}" if len(api_key) > 10 else ("*" * len(api_key))
         active_model = groq_model or (self.models[self.current_idx] if self.models else PREFERRED_MODELS[0])
+        if self.last_rag_error:
+            rag_status = {"state": "error", "error": self.last_rag_error}
+        elif self.last_rag_stats is not None:
+            rag_status = {"state": "ready", **self.last_rag_stats}
+        else:
+            rag_status = {"state": "indexing"}
+
         return {
             "has_api_key": bool(api_key),
             "groq_api_key": api_key,
@@ -95,6 +120,7 @@ class BridgeApi:
             "workspace": str(get_base_dir()),
             "active_model": active_model,
             "models": self.models,
+            "rag_status": rag_status,
         }
 
     def save_settings(self, data: dict) -> dict:
@@ -111,6 +137,7 @@ class BridgeApi:
                 cfg = _load_local_config()
                 cfg["workspace"] = str(resolved_ws)
                 _save_local_config(cfg)
+                threading.Thread(target=self._index_workspace_bg, daemon=True).start()
 
             save_api_key(api_key, groq_model)
             self._refresh_models(api_key)
@@ -131,6 +158,7 @@ class BridgeApi:
             cfg = _load_local_config()
             cfg["workspace"] = str(resolved_ws)
             _save_local_config(cfg)
+            threading.Thread(target=self._index_workspace_bg, daemon=True).start()
             return {"ok": True, "workspace": str(resolved_ws)}
         return {"ok": False}
 
@@ -237,9 +265,14 @@ def main() -> None:
         assert load_instructions(), "system prompt.yaml missing"
         os.environ.setdefault("GROQ_API_KEY", "self_test_dummy_key")
         bridge = BridgeApi()
+        bridge._index_thread.join(timeout=60)
+        if bridge.last_rag_error:
+            raise RuntimeError(f"RAG runtime indexing failed: {bridge.last_rag_error}")
+        assert bridge.last_rag_stats is not None, "RAG stats not populated"
+        assert (AGENT_DIR / "rag_index.db").is_file(), "rag_index.db was not created"
         assert bridge.get_settings()["has_api_key"] is True
         assert build_agent(PREFERRED_MODELS[0], "self_test_dummy_key") is not None
-        print("SELF_TEST_OK")
+        print(f"SELF_TEST_OK: {bridge.last_rag_stats}")
         return
 
     bridge = BridgeApi()

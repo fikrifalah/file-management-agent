@@ -15,8 +15,10 @@ from tools import (
     create_file,
     delete_file,
     get_resource_dir,
+    initialize_rag_index,
     list_directories,
     move_file,
+    rag_search,
     read_file,
     replace_in_file,
     search_in_files,
@@ -129,6 +131,7 @@ def build_agent(model_id: str, api_key: str) -> CodeAgent:
     )
     return CodeAgent(
         tools=[
+            rag_search,
             list_directories,
             read_file,
             search_in_files,
@@ -182,6 +185,13 @@ def run_task_with_fallback(task: str, models: list[str], api_key: str, start_idx
 
 def main() -> None:
     api_key = ensure_api_key()
+
+    console.print("[cyan]Indexing workspace files into local SQLite + sqlite-vec RAG database...[/cyan]")
+    rag_stats = initialize_rag_index()
+    console.print(
+        f"[dim]RAG ready — indexed {rag_stats['indexed_files']} file(s) "
+        f"({rag_stats['unchanged_files']} cached, {rag_stats['new_chunks']} new chunks).[/dim]"
+    )
 
     env_model = os.getenv("GROQ_MODEL")
     if env_model:

@@ -2,3 +2,9 @@
 __pycache__/
 *.pyc
 .env
+config.json
+rag_index.db*
+models_cache/
+build/
+dist/
+*.spec
